@@ -25,7 +25,8 @@ import (
 var _ internal.Detector = (*detector)(nil)
 
 type detector struct {
-	provider              k8snode.Provider
+	cfg                   Config
+	provider              k8snode.Provider // built on first Detect, see init
 	logger                *zap.Logger
 	ra                    *metadata.ResourceAttributesConfig
 	rb                    *metadata.ResourceBuilder
@@ -34,16 +35,8 @@ type detector struct {
 
 func NewDetector(set processor.Settings, dcfg internal.DetectorConfig, failOnMissingMetadata bool) (internal.Detector, error) {
 	cfg := dcfg.(Config)
-	if err := cfg.UpdateDefaults(); err != nil {
-		return nil, err
-	}
-	nodeName := os.Getenv(cfg.NodeFromEnvVar)
-	k8snodeProvider, err := k8snode.NewProvider(nodeName, k8sconfig.FromConfigTypes(cfg.APIConfig))
-	if err != nil {
-		return nil, fmt.Errorf("failed creating k8snode detector: %w", err)
-	}
 	return &detector{
-		provider:              k8snodeProvider,
+		cfg:                   cfg,
 		logger:                set.Logger,
 		ra:                    &cfg.ResourceAttributes,
 		rb:                    metadata.NewResourceBuilder(cfg.ResourceAttributes),
@@ -58,7 +51,31 @@ func NewDeprecatedDetector(set processor.Settings, dcfg internal.DetectorConfig,
 	return NewDetector(set, dcfg, failOnMissingMetadata)
 }
 
+// init builds the provider. It runs in Detect rather than in NewDetector so that
+// configuring this detector outside Kubernetes does not fail processor creation.
+func (d *detector) init() error {
+	if err := d.cfg.UpdateDefaults(); err != nil {
+		return err
+	}
+	provider, err := k8snode.NewProvider(os.Getenv(d.cfg.NodeFromEnvVar), k8sconfig.FromConfigTypes(d.cfg.APIConfig))
+	if err != nil {
+		return fmt.Errorf("failed creating k8snode detector: %w", err)
+	}
+	d.provider = provider
+	return nil
+}
+
 func (d *detector) Detect(ctx context.Context) (resource pcommon.Resource, schemaURL string, err error) {
+	if d.provider == nil {
+		if err := d.init(); err != nil {
+			if d.failOnMissingMetadata {
+				return pcommon.NewResource(), "", err
+			}
+			d.logger.Debug("k8snode metadata unavailable", zap.Error(err))
+			return pcommon.NewResource(), "", nil
+		}
+	}
+
 	if d.ra.K8sNodeUID.Enabled {
 		nodeUID, err := d.provider.NodeUID(ctx)
 		if err != nil {

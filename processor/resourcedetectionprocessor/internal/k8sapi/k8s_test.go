@@ -266,22 +266,34 @@ func TestDetectNodeErrors(t *testing.T) {
 	}
 }
 
-func TestNewDetectorErrors(t *testing.T) {
-	t.Run("missing node name env var", func(t *testing.T) {
-		t.Setenv("K8S_NODE_NAME", "")
-		d, err := NewDetector(processortest.NewNopSettings(processortest.NopType), CreateDefaultConfig(), false)
-		require.ErrorContains(t, err, "node name can't be found")
-		assert.Nil(t, d)
-	})
-
-	t.Run("service account auth outside a cluster", func(t *testing.T) {
-		t.Setenv("K8S_NODE_NAME", "mainNode")
-		t.Setenv("KUBERNETES_SERVICE_HOST", "")
-		t.Setenv("KUBERNETES_SERVICE_PORT", "")
-		d, err := NewDetector(processortest.NewNopSettings(processortest.NopType), CreateDefaultConfig(), false)
-		require.ErrorContains(t, err, "failed creating k8snode detector")
-		assert.Nil(t, d)
-	})
+func TestDetectOutsideKubernetes(t *testing.T) {
+	tt := []struct {
+		name     string
+		nodeName string
+		wantErr  string
+	}{
+		{name: "missing node name env var", wantErr: "node name can't be found"},
+		{name: "service account auth outside a cluster", nodeName: "mainNode", wantErr: "failed creating k8snode detector"},
+	}
+	for _, tc := range tt {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("K8S_NODE_NAME", tc.nodeName)
+			t.Setenv("KUBERNETES_SERVICE_HOST", "")
+			t.Setenv("KUBERNETES_SERVICE_PORT", "")
+			for _, failOnMissingMetadata := range []bool{false, true} {
+				d, err := NewDetector(processortest.NewNopSettings(processortest.NopType), CreateDefaultConfig(), failOnMissingMetadata)
+				require.NoError(t, err)
+				res, schemaURL, err := d.Detect(t.Context())
+				if failOnMissingMetadata {
+					require.ErrorContains(t, err, tc.wantErr)
+				} else {
+					require.NoError(t, err)
+				}
+				assert.Empty(t, schemaURL)
+				assert.Equal(t, 0, res.Attributes().Len())
+			}
+		})
+	}
 }
 
 func TestNewDeprecatedDetector(t *testing.T) {

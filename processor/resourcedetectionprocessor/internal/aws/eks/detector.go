@@ -51,8 +51,9 @@ const (
 type detector struct {
 	cfg                   Config
 	logger                *zap.Logger
+	awsConfig             aws.Config
 	imdsProvider          imdsprovider.Provider
-	apiProvider           apiprovider.Provider
+	apiProvider           apiprovider.Provider // built on first use, see isEKS
 	ra                    metadata.ResourceAttributesConfig
 	rb                    *metadata.ResourceBuilder
 	utils                 detectorUtils
@@ -83,16 +84,10 @@ func NewDetector(set processor.Settings, dcfg internal.DetectorConfig, failOnMis
 		return nil, err
 	}
 
-	nodeName := os.Getenv(cfg.NodeFromEnvVar)
-	apiProvider, err := apiprovider.NewProvider(awsConfig, nodeName, k8sconfig.FromConfigTypes(cfg.APIConfig))
-	if err != nil {
-		return nil, err
-	}
-
 	return &detector{
 		cfg:                   cfg,
 		logger:                set.Logger,
-		apiProvider:           apiProvider,
+		awsConfig:             awsConfig,
 		imdsProvider:          imdsprovider.NewProvider(awsConfig),
 		ra:                    cfg.ResourceAttributes,
 		rb:                    metadata.NewResourceBuilder(cfg.ResourceAttributes),
@@ -202,6 +197,17 @@ func (d *detector) detectFromAPI(ctx context.Context) (pcommon.Resource, string,
 func (d *detector) isEKS(ctx context.Context) (bool, error) {
 	if os.Getenv(kubernetesServiceHostEnvVar) == "" {
 		return false, nil
+	}
+
+	// The API client is built here rather than in NewDetector so that configuring
+	// this detector outside Kubernetes does not fail processor creation.
+	if d.apiProvider == nil {
+		nodeName := os.Getenv(d.cfg.NodeFromEnvVar)
+		apiProvider, err := apiprovider.NewProvider(d.awsConfig, nodeName, k8sconfig.FromConfigTypes(d.cfg.APIConfig))
+		if err != nil {
+			return false, err
+		}
+		d.apiProvider = apiProvider
 	}
 
 	// Check for EKS-specific IRSA token path

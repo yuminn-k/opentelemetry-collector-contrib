@@ -119,14 +119,18 @@ func TestDetectPartial(t *testing.T) {
 	}
 }
 
-func TestNewDetectorError(t *testing.T) {
+func TestDetectOutsideKubernetes(t *testing.T) {
 	// service account auth outside a cluster fails to build the API client
 	t.Setenv("KUBERNETES_SERVICE_HOST", "")
 	t.Setenv("KUBERNETES_SERVICE_PORT", "")
 
-	d, err := NewDetector(processortest.NewNopSettings(processortest.NopType), CreateDefaultConfig(), false)
+	got, err := detect(t, CreateDefaultConfig(), false)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	got, err = detect(t, CreateDefaultConfig(), true)
 	require.ErrorContains(t, err, "failed creating Kubernetes client")
-	assert.Nil(t, d)
+	assert.Empty(t, got)
 }
 
 func TestNewDetectorPreservesAPIConfig(t *testing.T) {
@@ -149,7 +153,6 @@ func TestNewDetectorPreservesAPIConfig(t *testing.T) {
 		KubeAPIQPS:   12.5,
 		KubeAPIBurst: 25,
 	}
-	d, err := NewDetector(processortest.NewNopSettings(processortest.NopType), cfg, false)
+	_, err := detect(t, cfg, false)
 	require.NoError(t, err)
-	assert.NotNil(t, d)
 }

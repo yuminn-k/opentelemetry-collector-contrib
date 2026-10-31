@@ -701,8 +701,30 @@ func TestNewDetectorOutsideCluster(t *testing.T) {
 	t.Setenv("KUBERNETES_SERVICE_PORT", "")
 
 	d, err := NewDetector(processortest.NewNopSettings(processortest.NopType), CreateDefaultConfig(), false)
-	require.ErrorContains(t, err, "Could not load cluster config")
-	assert.Nil(t, d)
+	require.NoError(t, err)
+	res, schemaURL, err := d.Detect(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, schemaURL)
+	assert.Equal(t, 0, res.Attributes().Len())
+}
+
+func TestDetectAPIClientUnavailable(t *testing.T) {
+	isolateAWSConfig(t)
+	// The host alone makes the detector look for EKS, but the API client cannot be built without the port.
+	t.Setenv("KUBERNETES_SERVICE_HOST", "127.0.0.1")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+
+	for _, failOnMissingMetadata := range []bool{false, true} {
+		d, err := NewDetector(processortest.NewNopSettings(processortest.NopType), CreateDefaultConfig(), failOnMissingMetadata)
+		require.NoError(t, err)
+		res, _, err := d.Detect(t.Context())
+		if failOnMissingMetadata {
+			require.ErrorContains(t, err, "Could not load cluster config")
+		} else {
+			require.NoError(t, err)
+		}
+		assert.Equal(t, 0, res.Attributes().Len())
+	}
 }
 
 func TestNewDetectorWithAPIConfig(t *testing.T) {
