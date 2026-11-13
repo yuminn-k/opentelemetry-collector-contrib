@@ -154,7 +154,13 @@ func (f *Factory) NewReaderFromMetadata(file *os.File, m *Metadata) (r *Reader, 
 		r.Offset = info.Size()
 	}
 
-	tokenLenFunc := m.TokenLenState.Func(f.SplitFunc)
+	splitFunc := f.SplitFunc
+	if f.TruncateOnMaxLogSize && m.FileType == gzipExtension {
+		// A gzip stream is read to its end at once, so EOF ends the last entry. Otherwise the
+		// remainder of a truncated last entry is emitted by the scanner's flush at EOF.
+		splitFunc = flushAtEOF(splitFunc)
+	}
+	tokenLenFunc := m.TokenLenState.Func(splitFunc)
 	flushFunc := m.FlushState.Func(tokenLenFunc, f.FlushTimeout)
 	var lengthLimitedFunc bufio.SplitFunc
 	if f.TruncateOnMaxLogSize {
@@ -184,4 +190,15 @@ func (f *Factory) NewReaderFromMetadata(file *os.File, m *Metadata) (r *Reader, 
 	r.FileAttributes = mergedAttributes
 
 	return r, nil
+}
+
+// flushAtEOF returns the data left at EOF as the last token, like the scanner does for gzip files.
+func flushAtEOF(splitFunc bufio.SplitFunc) bufio.SplitFunc {
+	return func(data []byte, atEOF bool) (int, []byte, error) {
+		advance, token, err := splitFunc(data, atEOF)
+		if advance == 0 && token == nil && err == nil && atEOF && len(data) > 0 {
+			return len(data), data, nil
+		}
+		return advance, token, err
+	}
 }
