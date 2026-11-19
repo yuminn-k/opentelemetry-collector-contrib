@@ -6,7 +6,6 @@ package sumconnector // import "github.com/open-telemetry/opentelemetry-collecto
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strconv"
 	"time"
 
@@ -58,14 +57,7 @@ func (c *summer[K]) update(ctx context.Context, attrs pcommon.Map, tCtx K) error
 		// Get attribute values to include otherwise use default value
 		for _, attr := range md.attrs {
 			if attrVal, ok := attrs.Get(attr.Key); ok {
-				switch {
-				case attrVal.Str() != "":
-					sumAttrs.PutStr(attr.Key, attrVal.Str())
-				case attrVal.Double() != 0:
-					sumAttrs.PutStr(attr.Key, fmt.Sprintf("%v", attrVal.Double()))
-				case attrVal.Int() != 0:
-					sumAttrs.PutStr(attr.Key, fmt.Sprintf("%v", attrVal.Int()))
-				}
+				attrVal.CopyTo(sumAttrs.PutEmpty(attr.Key))
 			} else if attr.DefaultValue != nil {
 				switch v := attr.DefaultValue.(type) {
 				case string:

@@ -12,6 +12,8 @@ import (
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/connector/connectortest"
 	"go.opentelemetry.io/collector/consumer/consumertest"
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/connector/sumconnector/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden"
@@ -722,5 +724,51 @@ func TestLogsToMetrics(t *testing.T) {
 				pmetrictest.IgnoreMetricFloatPrecision(3),
 				pmetrictest.IgnoreMetricDataPointsOrder()))
 		})
+	}
+}
+
+func TestLogsToMetricsAttributeValueTypes(t *testing.T) {
+	cfg := &Config{Logs: map[string]MetricInfo{
+		"amount.sum": {SourceAttribute: "amount", Attributes: []AttributeConfig{{Key: "dim"}}},
+	}}
+	sink := &consumertest.MetricsSink{}
+	conn, err := NewFactory().CreateLogsToMetrics(t.Context(), connectortest.NewNopSettings(metadata.Type), cfg, sink)
+	require.NoError(t, err)
+
+	dims := []func(pcommon.Value){
+		func(v pcommon.Value) { v.SetStr("a") },
+		func(v pcommon.Value) { v.SetStr("") },
+		func(v pcommon.Value) { v.SetInt(7) },
+		func(v pcommon.Value) { v.SetInt(0) },
+		func(v pcommon.Value) { v.SetDouble(1.5) },
+		func(v pcommon.Value) { v.SetDouble(0) },
+		func(v pcommon.Value) { v.SetBool(true) },
+		func(v pcommon.Value) { v.SetBool(false) },
+	}
+	ld := plog.NewLogs()
+	lrs := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords()
+	for _, set := range dims {
+		lr := lrs.AppendEmpty()
+		lr.Attributes().PutDouble("amount", 1)
+		set(lr.Attributes().PutEmpty("dim"))
+	}
+	require.NoError(t, conn.ConsumeLogs(t.Context(), ld))
+
+	require.Len(t, sink.AllMetrics(), 1)
+	dps := sink.AllMetrics()[0].ResourceMetrics().At(0).ScopeMetrics().At(0).Metrics().At(0).Sum().DataPoints()
+	require.Equal(t, len(dims), dps.Len())
+	for i := 0; i < dps.Len(); i++ {
+		assert.InDelta(t, 1.0, dps.At(i).DoubleValue(), 0)
+	}
+	// Dimension values keep their original type, as in the count connector.
+	got := map[string]pcommon.ValueType{}
+	for i := 0; i < dps.Len(); i++ {
+		v, ok := dps.At(i).Attributes().Get("dim")
+		require.True(t, ok)
+		got[v.AsString()+"/"+v.Type().String()] = v.Type()
+	}
+	assert.Len(t, got, len(dims))
+	for _, k := range []string{"a/Str", "/Str", "7/Int", "0/Int", "1.5/Double", "0/Double", "true/Bool", "false/Bool"} {
+		assert.Contains(t, got, k)
 	}
 }
